@@ -1,7 +1,6 @@
 import torch
 
 kernel_size = 3
-pooling_kernel_size = 2
 dropout_percent = 0.5
 embed_size = 128
 n_res_blocks = 4

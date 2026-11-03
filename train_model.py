@@ -56,6 +56,7 @@ def validation_epoch(model: ChessModel, loader: torch.utils.data.DataLoader, pre
 def train_val_test_split(u: torch.Tensor, v: torch.Tensor, train_perc: float, val_perc: float) \
         -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     assert u.shape[0] == v.shape[0], 'Input tensors must have identical first dimensions'
+    assert 0 < train_perc < 1 and 0 < val_perc <= 1 - train_perc, 'Invalid percentages'
     n = round(train_perc * u.shape[0])
     m = round(val_perc * u.shape[0])
     return u[:n], u[n: n + m], u[n + m:], v[:n], v[n: n + m], v[n + m:]

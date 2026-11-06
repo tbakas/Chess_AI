@@ -129,7 +129,7 @@ if __name__ == '__main__':
             data.loc[data.shape[0]] = state
             data_entries += 1
 
-            if data.shape[0] >= 10000 == 0:
+            if data.shape[0] >= 10000:
                 # save current data and empty the dataframe to prevent memory crash
                 data.to_csv(csv_path, mode='a', index=False, header=not file_exists)
                 file_exists = True

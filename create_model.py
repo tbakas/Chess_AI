@@ -47,7 +47,7 @@ class ChessModel(torch.nn.Module):
         global embed_size
         # B = batch size, M = embed size
         B = x.shape[0]
-        turn = x[:, 0].view((B, 1))
+        turn = x[:, 0:1]  # (B, 1)
         # embedding vector for each piece type
         board = self.piece_embed(x[:, 1:]).view((B, embed_size, 8, 8))
         # apply a resnet and average pooling

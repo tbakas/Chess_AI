@@ -1,36 +1,58 @@
 from create_model import ChessModel
 import pandas
 import torch
+import lightning
 import numpy
-from matplotlib import pyplot
 import logging
 from sklearn.metrics import confusion_matrix
+import os
 
 
 logger = logging.getLogger(__name__)
+max_epochs = 3
+batch_size = 64
+patience = 3
+# if set to false, this makes sure not all cpu cores are used
+on_collab = False
 
 
-def training_epoch(model: ChessModel, optimizer: torch.optim.Optimizer, loader: torch.utils.data.DataLoader) -> float:
-    epoch_loss = 0.0
-    model.train()
-    for xb, yb in loader:
-        optimizer.zero_grad(set_to_none=True)
+class ChessLightning(lightning.LightningModule):
+    def __init__(self, model):
+        super().__init__()
+        self.model = model
 
-        logits = model(xb)
-        loss = torch.nn.functional.cross_entropy(logits, yb)
-        epoch_loss += loss.item()
+    def training_step(self, batch, batch_idx):
+        x_batch, y_batch = batch
+        logits = self.model(x_batch)
+        loss = torch.nn.functional.cross_entropy(logits, y_batch)
+        self.log('train_loss', loss)
+        return loss
 
-        loss.backward()
-        optimizer.step()
-    return epoch_loss / len(loader)
+    def configure_optimizers(self):
+        optimizer = torch.optim.AdamW(self.model.parameters(), lr=1e-4)
+        lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, max_epochs)
+        optim_dict = {'optimizer': optimizer,
+                      'lr_schedule': {'scheduler': lr_scheduler, 'step': 'epoch', 'frequency': 1}}
+        return optim_dict
+
+    def validation_step(self, batch, batch_idx):
+        x_batch, y_batch = batch
+        logits = self.model(x_batch)
+        loss = torch.nn.functional.cross_entropy(logits, y_batch)
+        self.log('val_loss', loss)
+
+        _, predicted = torch.max(logits.data, 1)
+        acc = (predicted == y_batch).sum() / y_batch.shape[0]
+        self.log('val_acc', acc)
+
+        return loss, acc
 
 
-def validation_epoch(model: ChessModel, loader: torch.utils.data.DataLoader, prediction_size=0) \
+def get_test_results(model: ChessModel, loader: torch.utils.data.DataLoader, prediction_size) \
         -> tuple[float, float, torch.Tensor]:
     predictions = torch.Tensor([0] * prediction_size)
     eval_loss = 0.0
     correct = k = 0
-    count = len(loader) * loader.batch_size
     model.eval()
 
     with torch.no_grad():
@@ -39,18 +61,16 @@ def validation_epoch(model: ChessModel, loader: torch.utils.data.DataLoader, pre
             loss = torch.nn.functional.cross_entropy(logits, yb)
             eval_loss += loss.item()
 
-            probabilities = torch.softmax(logits, dim=-1)
-            _, predicted = torch.max(probabilities.data, 1)
+            _, predicted = torch.max(logits.data, 1)
             correct += (predicted == yb).sum().item()
 
             if prediction_size:
                 predictions[k: k + predicted.shape[0]] = predicted
                 k += predicted.shape[0]
 
-    if prediction_size:
-        logger.info(f'Test predictions had {k} / {prediction_size} updated values.')
-
-    return eval_loss / len(loader), 100.0 * correct / count, predictions
+    # make sure all the prediction tensor's elements were modified
+    logger.info(f'Test predictions had {k} / {prediction_size} updated values.')
+    return eval_loss / len(loader), 100.0 * correct / prediction_size, predictions
 
 
 def train_val_test_split(u: torch.Tensor, v: torch.Tensor, train_perc: float, val_perc: float) \
@@ -72,12 +92,8 @@ if __name__ == '__main__':
         device = torch.device("cpu")
     logger.info(f'The device used is {device}')
 
-    chess_model = ChessModel().to(device)
-    batch_size = 64
-    epochs = 40
-
-    logger.info('Opening data/transformed_data.csv...')
-    data = pandas.read_csv("data/transformed_data.csv", header=None).to_numpy()
+    logger.info('Opening data/transformed_data.csv')
+    data = pandas.read_csv("data/transformed_data.csv", header=None, nrows=2000).to_numpy()
 
     idx = numpy.arange(data.shape[0])
     rng = numpy.random.default_rng(seed=27)
@@ -90,61 +106,43 @@ if __name__ == '__main__':
 
     del data, rng, idx, x, y
 
+    if not on_collab:
+        num_workers = max(1, os.cpu_count() - 1)
+    else:
+        num_workers = max(1, os.cpu_count())
+
     train_dataset = torch.utils.data.TensorDataset(x_train, y_train)
-    train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size, shuffle=False)
+    train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size, shuffle=False,
+                                               num_workers=num_workers, persistent_workers=True)
 
     val_dataset = torch.utils.data.TensorDataset(x_val, y_val)
-    val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
+    val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=batch_size, shuffle=False,
+                                             num_workers=num_workers, persistent_workers=True)
 
-    chess_optimizer = torch.optim.AdamW(chess_model.parameters(), lr=1e-4)
-    train_loss = []
-    val_loss = []
-    val_acc = []
-    min_loss = float('inf')
+    chess_model = ChessModel().to(device)
+    chess_lightning = ChessLightning(chess_model)
+    early_stopping = lightning.pytorch.callbacks.EarlyStopping(monitor='val_loss', patience=patience, mode='min',
+                                                               verbose=False)
+    checkpoint_callback = lightning.pytorch.callbacks.ModelCheckpoint(monitor="val_loss", mode="min", save_top_k=1,
+                                                                      filename="{epoch}-{val_loss:.3f}")
+
+    trainer = lightning.Trainer(max_epochs=max_epochs, callbacks=[early_stopping, checkpoint_callback])
 
     logger.info('Beginning the training loop...')
-    for i in range(epochs):
-        print(f'\rCompleted {i} out of {epochs} epochs.', end='')
-        chess_loss = training_epoch(chess_model, chess_optimizer, train_loader)
-        train_loss.append(chess_loss)
+    trainer.fit(chess_lightning, train_loader, val_loader)
+    logger.info('Training completed.')
 
-        chess_loss, chess_acc, _ = validation_epoch(chess_model, val_loader)
-        val_loss.append(chess_loss)
-        val_acc.append(chess_acc)
-
-        message1 = f'Completed epoch {i + 1}. Training loss of {train_loss[-1]: .3f}, val loss of {chess_loss: .3f}, '
-        message2 = f'and val accuracy of {chess_acc: .3f}%'
-        logger.info(message1 + message2)
-
-        if val_loss[-1] < min_loss:
-            min_loss = val_loss[-1]
-            torch.save(chess_model.state_dict(), "model_weights.pth")
-            torch.save(chess_optimizer.state_dict(), "optimizer.pth")
-            logger.info(f'Obtained a minium val loss of {min_loss: .3f} on epoch {i + 1}. Saving current model.')
-
-    del chess_optimizer, train_loader, train_dataset, val_dataset, val_loader
-
-    logger.info(f'Training complete with a minimum val loss of {min_loss: .3f}')
-
-    dummy = range(1, epochs + 1)
-    pyplot.plot(dummy, train_loss, 'o-')
-    pyplot.plot(dummy, val_loss, 'o-')
-    pyplot.xlabel('epoch')
-    pyplot.ylabel('loss')
-    pyplot.legend(['Train', 'Val'])
-    pyplot.savefig('loss_plot.png')
-
-    pyplot.clf()
-    pyplot.plot(dummy, val_acc, 'o-')
-    pyplot.xlabel('epoch')
-    pyplot.ylabel('val acc')
-    pyplot.savefig('acc_plot.png')
+    del trainer, train_loader, train_dataset, val_dataset, val_loader
 
     test_dataset = torch.utils.data.TensorDataset(x_test, y_test)
-    test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
-    test_loss, test_acc, y_hat = validation_epoch(chess_model, test_loader, prediction_size=y_test.shape[0])
+    test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=batch_size, shuffle=False,
+                                              num_workers=num_workers, persistent_workers=True)
+
+    logger.info('Beginning testing.')
+    test_loss, test_acc, y_hat = get_test_results(chess_model, test_loader, prediction_size=y_test.shape[0])
+    del test_loader, test_dataset
 
     labels = ['1-0', '1/2-1/2', '0-1']
     confusion = pandas.DataFrame(confusion_matrix(y_pred=y_hat, y_true=y_test), index=labels, columns=labels)
     confusion = '\nConfusion Table. Rows are true values. Columns are predictions.\n' + confusion.to_string()
-    logger.info(f'Test loss of {test_loss: .3f}. Test accuracy of {test_acc: .3f}%' + confusion)
+    logger.info(f'Test loss of {test_loss: .3f}. Test accuracy of {test_acc: .2f}%' + confusion)

@@ -11,6 +11,7 @@ import os
 logger = logging.getLogger(__name__)
 max_epochs = 3
 batch_size = 64
+# patience parameter for early stopping
 patience = 3
 # if set to false, this makes sure not all cpu cores are used
 on_collab = False

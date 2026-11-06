@@ -25,6 +25,7 @@ def test_gradient():
     for name, param in model.named_parameters():
         assert param.grad is not None, f'Parameter {name} has null gradient.'
         assert not torch.isnan(param.grad).any(), f'Parameter {name} has a nan value in gradient.'
+        assert not torch.equal(param.grad, torch.zeros(param.grad.shape))
 
 
 def test_serialization():

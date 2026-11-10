@@ -1,3 +1,5 @@
+import chess
+
 import transform
 
 
@@ -13,18 +15,17 @@ def test_get_move_to_int():
         assert i == move_to_int[m]
 
 
-def test_board_to_array():
+def test_board_to_list():
     # starting position
     board = transform.chess.Board()
-    n = transform.board_to_array(board)
+    n = transform.board_to_list(board)
 
-    assert n.shape == (64,)
-    assert type(n) == transform.numpy.ndarray
-    assert n.dtype == transform.numpy.int64
+    assert len(n) == 64
+    assert all(isinstance(x, int) for x in n)
     for x in n:
         assert 0 <= x <= 12
     assert n[0] == 10, "No black rook at a8"
-    assert n[n.shape[0] - 2] == 2, "No white bishop at g1"
+    assert n[len(n) - 2] == 2, "No white bishop at g1"
 
 
 def test_get_time():
@@ -46,13 +47,36 @@ def test_get_moves():
     assert transform.get_moves('1K b - -"] 1. e4 1... e5 2. Nf3 2... Nc6') == ['e4', 'e5', 'Nf3', 'Nc6']
 
 
-def test_get_states():
-    s = transform.get_states(['e3', 'e5'])
-    assert s[0].dtype == transform.numpy.int64
-    assert s[0].shape[0] == 66, "State is wrong length."
+def test_transform_move_list():
+    pos, turn, n_move, mask = transform.transform_move_list(['e3', 'e5'])
+    assert all(isinstance(x, int) for x in pos[0])
+    assert len(pos[0]) == 64 and len(pos[1]) == 64
+    assert len(pos) == 2
 
-    assert s[0][1] == 0, "The first game state doesn't have white to move."
-    assert s[0][s[0].shape[0] - 20] == 0, "No empty space on e3 at start"
+    for t in turn:
+        assert t == 0 or t == 1
+    for b in mask[0]:
+        assert b == 0 or b == 1
+    for m in n_move:
+        assert 0 <= m <= 1967 and type(m) == int
 
-    assert s[1][1] == 1, "The second game state doesn't have black to move."
-    assert s[1][s[1].shape[0] - 20] == 1, "No white pawn on e3 after 1. e3"
+    board = chess.Board()
+
+    assert turn[0] == 0, "The first game state doesn't have white to move."
+    assert pos[0][64 - 20] == 0, "No empty space on e3 at start"
+    assert n_move[0] == transform.move_to_int[board.parse_san('e3').uci()]
+    for move in board.legal_moves:
+        n = transform.move_to_int[move.uci()]
+        assert mask[0][n] == 1
+    assert sum(mask[0]) == board.legal_moves.count()
+
+    board.push_san('e3')
+
+    assert turn[1] == 1, "The second game state doesn't have black to move."
+    assert pos[1][64 - 20] == 1, "No white pawn on e3 after 1. e3"
+    assert n_move[1] == transform.move_to_int[board.parse_san('e5').uci()]
+    print(transform.move_to_int)
+    for move in board.legal_moves:
+        n = transform.move_to_int[move.uci()]
+        assert mask[1][n] == 1
+    assert sum(mask[1]) == board.legal_moves.count()

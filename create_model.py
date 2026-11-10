@@ -23,41 +23,31 @@ class ResNetBlock(torch.nn.Module):
         return self.activation(x + out)
 
 
-class MLPBlock(torch.nn.Module):
-    def __init__(self, in_size, out_size):
-        super().__init__()
-        self.linear = torch.nn.Linear(in_size, out_size)
-        self.activation = torch.nn.SiLU()
-        self.batchnorm = torch.nn.BatchNorm1d(out_size)
-        self.dropout = torch.nn.Dropout(dropout_percent)
-
-    def forward(self, x):
-        x = x + self.dropout(self.activation(self.batchnorm(self.linear(x))))
-        return x
-
-
 class ChessModel(torch.nn.Module):
     def __init__(self):
         super().__init__()
         self.piece_embed = torch.nn.Embedding(13, embed_size)
         self.res_blocks = torch.nn.Sequential(*[ResNetBlock(embed_size) for _ in range(n_res_blocks)])
-        self.avg_pool = torch.nn.AvgPool2d(8)
-        self.down_scale = torch.nn.Linear(embed_size + 1, mlp_size)
-        self.mlp_blocks = torch.nn.Sequential(*[MLPBlock(mlp_size, mlp_size) for _ in range(n_mlp_blocks)])
-        self.final_linear = torch.nn.Linear(mlp_size, output_size)
+        self.conv1x1 = torch.nn.Conv2d(embed_size, 8, kernel_size=1)
+        self.final_linear = torch.nn.Linear(512 + 1, output_size)
+        self.batchnorm = torch.nn.BatchNorm2d(8)
+        self.activation = torch.nn.SiLU()
 
     def forward(self, x, turn):
         global embed_size
         # B = batch size, M = embed size
         B = x.shape[0]
+        turn = turn.view((B, 1))
         # embedding vector for each piece type
-        board = self.piece_embed(x).view((B, embed_size, 8, 8))
-        # apply a resnet and average pooling
-        board = self.avg_pool(self.res_blocks(board)).view((B, embed_size))  # (B, M)
-        # concatenate back the turn data
-        x = torch.concat((turn.view((B, 1)), board), axis=1)  # (B, M + 1)
-        # apply a MLP and then a final linear layer to get logits
-        return self.final_linear(self.mlp_blocks(self.down_scale(x)))
+        x = self.piece_embed(x).view((B, embed_size, 8, 8))
+        # apply a resnet
+        x = self.res_blocks(x)  # (B, M, 8, 8)
+        # send through a 1x1 convolution with batchnorm/activation then flatten
+        x = self.activation(self.batchnorm(self.conv1x1(x))).view((B, -1))  # (B, 512)
+        # concat with turn information
+        x = torch.concat((x, turn), axis=-1)  # (B, 513)
+        # linear layer to logits
+        return self.final_linear(x)
 
 
 if __name__ == '__main__':

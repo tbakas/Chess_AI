@@ -8,8 +8,8 @@ import os
 
 logger = logging.getLogger(__name__)
 max_epochs = 10
-batch_size = 64
-patience = 3
+max_rows = 5000
+batch_size = 512
 base_path = ''
 
 
@@ -74,10 +74,10 @@ if __name__ == '__main__':
 
     logger.info('Opening transformed_data.csv')
     data = numpy.load(base_path + "transformed_data.npz")
-    x = torch.tensor(data['position'])
-    t = torch.tensor(data['turn'])
-    y = torch.tensor(data['next_move'])
-    mask = torch.tensor(data['mask'])
+    x = torch.tensor(data['position'][:max_rows])
+    t = torch.tensor(data['turn'][:max_rows])
+    y = torch.tensor(data['next_move'][:max_rows])
+    mask = torch.tensor(data['mask'][:max_rows])
 
     del data
 
@@ -106,12 +106,10 @@ if __name__ == '__main__':
     val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
 
     chess_lightning = ChessLightning(chess_model)
-    early_stopping = lightning.pytorch.callbacks.EarlyStopping(monitor='val_loss', patience=patience, mode='min',
-                                                               verbose=False)
     checkpoint_callback = lightning.pytorch.callbacks.ModelCheckpoint(monitor="val_loss", mode="min", save_top_k=1,
                                                                       filename="{epoch}-{val_loss:.3f}")
 
-    trainer = lightning.Trainer(max_epochs=max_epochs, callbacks=[early_stopping, checkpoint_callback])
+    trainer = lightning.Trainer(max_epochs=max_epochs, callbacks=[checkpoint_callback])
 
     logger.info('Beginning the training loop...')
     trainer.fit(chess_lightning, train_loader, val_loader)

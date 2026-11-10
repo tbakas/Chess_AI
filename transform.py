@@ -13,6 +13,54 @@ piece_to_int = {'.': 0, 'P': 1, 'N': 2, 'B': 3, 'R': 4, 'Q': 5, 'K': 6,
 # Upper case are white pieces, lower case are black pieces
 
 
+def get_move_to_int() -> dict[str, int]:
+    moves = []
+
+    for x in range(8):
+        for y in range(8):
+            # Queen type moves
+            board = chess.Board("8/8/8/8/8/8/8/8")
+            board.set_piece_at(chess.square(x, y), chess.Piece(chess.QUEEN, chess.WHITE))
+            moves.extend(board.generate_legal_moves())
+
+            # Knight moves
+            board = chess.Board("8/8/8/8/8/8/8/8")
+            board.set_piece_at(chess.square(x, y), chess.Piece(chess.KNIGHT, chess.WHITE))
+            moves.extend(board.generate_legal_moves())
+
+    # Pawn promotions
+    for x in range(8):
+        for y in [1, 6]:
+            board = chess.Board("8/8/8/8/8/8/8/8")
+
+            if y == 6:
+                # white to promote
+                dy = 1
+                color = chess.WHITE
+                other = chess.BLACK
+            else:
+                # black to promote
+                dy = -1
+                other = chess.WHITE
+                color = chess.BLACK
+            board.set_piece_at(chess.square(x, y), chess.Piece(chess.PAWN, color))
+            board.turn = color
+
+            if x <= 6:
+                board.set_piece_at(chess.square(x + 1, y + dy), chess.Piece(chess.ROOK, other))
+            if x >= 1:
+                board.set_piece_at(chess.square(x - 1, y + dy), chess.Piece(chess.ROOK, other))
+            moves.extend(board.generate_legal_moves())
+
+    move_to_int_ = dict()
+    for i, m in enumerate(moves):
+        move_to_int_[m.uci()] = i
+    return move_to_int_
+
+
+move_to_int = get_move_to_int()
+
+
 def board_to_array(b: chess.Board) -> numpy.ndarray:
     n = numpy.zeros(64, dtype=int)
     i = 0
@@ -24,16 +72,6 @@ def board_to_array(b: chess.Board) -> numpy.ndarray:
     return n
 
 
-def get_result(text: str) -> int:
-    pattern = '1-0|0-1|1/2-1/2'
-    m = search(pattern, text).group()
-    if m == '1-0':
-        return 0
-    elif m == '0-1':
-        return 2
-    return 1
-
-
 def get_time(text: str) -> int:
     m = search('TimeControl "\\d+', text).group()
     return int(m.split()[-1].strip('"'))
@@ -43,11 +81,8 @@ def should_skip_game(game_text: str) -> bool:
     time = get_time(game_text)
     if time < 180:
         return True
-    if search('Chess960', game_text):
-        return True
-    if search('on time', game_text):
-        return True
-    if search('game abandoned', game_text):
+    pattern = 'Chess960|on time|game abandoned|Odds Chess'
+    if search(pattern, game_text):
         return True
     return False
 
@@ -63,15 +98,17 @@ def get_moves(game_text: str) -> list[str]:
     return move_list
 
 
-def get_states(result: int, moves: list[str]) -> list[numpy.ndarray]:
-    # doesn't include starting position
+def get_states(moves: list[str]) -> list[numpy.ndarray]:
+    global move_to_int
     board = chess.Board()
     s = []
-    x = numpy.array([result, 1])
+    turn = 0
     for move in moves:
-        board.push_san(move)
+        move = board.parse_san(move)
+        x = numpy.array([move_to_int[move.uci()], turn], dtype=numpy.int64)
         s.append(numpy.concat((x, board_to_array(board)), dtype=numpy.int64))
-        x[1] ^= 1
+        board.push(move)
+        turn ^= 1
     return s
 
 
@@ -85,18 +122,17 @@ def game_states_generator(file_paths: list[str]) -> list[numpy.ndarray]:
                     try:
                         if should_skip_game(game):
                             continue
-                        result = get_result(game)
                         move_list = get_moves(game)
                     except AttributeError:
                         error_message = f'Game {c} in file {file_name} had a regex search error.'
-                        logger.error(error_message + '\n' + game)
+                        logger.error(error_message + '\n' + game + '\n')
                         continue
 
                     try:
-                        s = get_states(result, move_list)
+                        s = get_states(move_list)
                     except (chess.IllegalMoveError, chess.InvalidMoveError):
                         error_message = f'Game {c} in file {file_name} has an illegal move in move list.'
-                        logger.error(error_message + '\n' + game)
+                        logger.error(error_message + '\n' + game + '\n')
                         continue
 
                     yield s
@@ -108,19 +144,20 @@ if __name__ == '__main__':
     logging.basicConfig(filename='transform_log.log',
                         format='%(asctime)s [%(levelname)s] %(message)s', level=logging.DEBUG)
 
-    data = DataFrame(columns=['result', 'turn'] + [str(i) for i in range(64)])
-    # result: 0 for white win, 1 for draw and 2 for black win
+    data = DataFrame(columns=['move', 'turn'] + [str(i) for i in range(64)])
+    # move: an integer in range(0, 1968) for each possible chess move
     # turn: 0 for white's turn, 1 for black's turn
     # remaining columns are for recording where pieces are located on the board
+    # each piece type has an integer in range(0, 13)
 
     game_count = 0
     data_entries = 0
-    csv_path = 'data/transformed_data.csv'
+    csv_path = 'transformed_data.csv'
     file_exists = isfile(csv_path)
 
     logger.info('Starting the chess data transformation pipeline...')
 
-    paths = ['data/pgn_files/' + x for x in listdir('data/pgn_files/')]
+    paths = ['data/' + x for x in listdir('data/')]
     states_list = game_states_generator(paths)
     for states in states_list:
         print(f'\rgame count: {game_count}', end='')
@@ -133,10 +170,10 @@ if __name__ == '__main__':
                 # save current data and empty the dataframe to prevent memory crash
                 data.to_csv(csv_path, mode='a', index=False, header=not file_exists)
                 file_exists = True
-                data = DataFrame(columns=['result', 'turn'] + [str(i) for i in range(64)])
+                data = DataFrame(columns=['move', 'turn'] + [str(i) for i in range(64)])
 
         game_count += 1
-        if game_count % 100 == 0:
+        if game_count % 500 == 0:
             logging.info(f'Successfully parsed {game_count} games with {data_entries} total entries.')
 
     data.to_csv(csv_path, mode='a', index=False, header=False)

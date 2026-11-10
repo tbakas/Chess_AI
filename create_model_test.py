@@ -9,7 +9,7 @@ def test_output():
         dummy_input = torch.randint(high=13, size=(2, 65))
         out = model(dummy_input)
 
-    assert out.shape == (2, 3), f'Incorrect shape of {out.shape}, expected (2, 3).'
+    assert out.shape == (2, 1968), f'Incorrect shape of {out.shape}, expected (2, 1968).'
     assert out.device == dummy_input.device
     assert out.dtype == torch.float32
 

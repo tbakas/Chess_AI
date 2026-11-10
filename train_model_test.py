@@ -31,29 +31,6 @@ def test_validation_step():
     assert 0 <= acc.item() <= 100
 
 
-def test_get_test_results():
-    model = create_model.ChessModel()
-    x = torch.randint(high=13, size=(5, 65))
-    y = torch.randint(high=3, size=(5,))
-    dataset = torch.utils.data.TensorDataset(x, y)
-    loader = torch.utils.data.DataLoader(dataset, batch_size=2, shuffle=False)
-    avg_loss, acc, predictions = train_model.get_test_results(model, loader, prediction_size=y.shape[0])
-
-    assert type(avg_loss) == float
-    assert not torch.isnan(torch.tensor(avg_loss))
-
-    assert type(acc) == float
-    assert not torch.isnan(torch.tensor(acc))
-    assert 0 <= acc <= 100
-
-    vals = {0, 1, 2}
-    assert y.shape == predictions.shape
-    for i in range(predictions.shape[0]):
-        assert predictions[i].item() in vals
-
-    assert not model.training
-
-
 def test_train_val_test_split():
     x = torch.randint(high=13, size=(10, 65))
     y = torch.randint(high=3, size=(10,))

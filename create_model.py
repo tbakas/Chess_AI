@@ -46,17 +46,16 @@ class ChessModel(torch.nn.Module):
         self.mlp_blocks = torch.nn.Sequential(*[MLPBlock(mlp_size, mlp_size) for _ in range(n_mlp_blocks)])
         self.final_linear = torch.nn.Linear(mlp_size, output_size)
 
-    def forward(self, x):
+    def forward(self, x, turn):
         global embed_size
         # B = batch size, M = embed size
         B = x.shape[0]
-        turn = x[:, 0:1]  # (B, 1)
         # embedding vector for each piece type
-        board = self.piece_embed(x[:, 1:]).view((B, embed_size, 8, 8))
+        board = self.piece_embed(x).view((B, embed_size, 8, 8))
         # apply a resnet and average pooling
         board = self.avg_pool(self.res_blocks(board)).view((B, embed_size))  # (B, M)
         # concatenate back the turn data
-        x = torch.concat((turn, board), axis=1)  # (B, M + 1)
+        x = torch.concat((turn.view((B, 1)), board), axis=1)  # (B, M + 1)
         # apply a MLP and then a final linear layer to get logits
         return self.final_linear(self.mlp_blocks(self.down_scale(x)))
 

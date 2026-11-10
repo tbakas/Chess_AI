@@ -6,6 +6,7 @@ import logging
 
 
 logger = logging.getLogger(__name__)
+game_max = None
 piece_to_int = {'.': 0, 'P': 1, 'N': 2, 'B': 3, 'R': 4, 'Q': 5, 'K': 6,
                 'p': 7, 'n': 8, 'b': 9, 'r': 10, 'q': 11, 'k': 12}
 # Upper case are white pieces, lower case are black pieces
@@ -110,7 +111,7 @@ def transform_move_list(moves: list[str]) -> tuple[list[list[int]], list[int], l
         turn_.append(t)
         next_move_.append(move_to_int[move.uci()])
 
-        dummy = [0] * 1986
+        dummy = [0] * 1968
         for legal_move in board.legal_moves:
             dummy[move_to_int[legal_move.uci()]] = 1
         mask_.append(dummy)
@@ -176,11 +177,10 @@ if __name__ == '__main__':
 
         game_count += 1
 
-        if game_count == 1:
-            break
-
         if game_count % 500 == 0:
             logging.info(f'Successfully parsed {game_count} games with {data_entries} total entries.')
+        if game_max and game_count >= game_max:
+            break
 
     numpy.savez_compressed('transformed_data.npz', position=position, turn=turn, next_move=next_move, mask=mask)
     logger.info(f'Finished data transformation. Saved {game_count} games with {data_entries} data points.')

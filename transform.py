@@ -6,7 +6,8 @@ import logging
 
 
 logger = logging.getLogger(__name__)
-game_max = None
+data_max = 1e6
+log_every_n_games = 10000
 piece_to_int = {'.': 0, 'P': 1, 'N': 2, 'B': 3, 'R': 4, 'Q': 5, 'K': 6,
                 'p': 7, 'n': 8, 'b': 9, 'r': 10, 'q': 11, 'k': 12}
 # Upper case are white pieces, lower case are black pieces
@@ -77,6 +78,8 @@ def get_time(text: str) -> int:
 
 
 def should_skip_game(game_text: str) -> bool:
+    if len(game_text) == 0:
+        return True
     time = get_time(game_text)
     if time < 180:
         return True
@@ -176,11 +179,22 @@ if __name__ == '__main__':
         mask.extend(game_data[3])
 
         game_count += 1
+        data_entries += len(game_data[0])
 
-        if game_count % 500 == 0:
+        if game_count % log_every_n_games == 0:
             logging.info(f'Successfully parsed {game_count} games with {data_entries} total entries.')
-        if game_max and game_count >= game_max:
+        if data_entries >= data_max:
             break
 
-    numpy.savez_compressed('transformed_data.npz', position=position, turn=turn, next_move=next_move, mask=mask)
+    # could have probably also used a sparse method for saving mask since I imagine
+    # most of the move classes are probably illegal.
+    numpy.save('mask.npy', numpy.packbits(numpy.array(mask, dtype=numpy.bool), axis=1))
+    del mask
+    numpy.save('x.npy', numpy.array(position, dtype=numpy.int8))
+    del position
+    numpy.save('t.npy', numpy.array(turn, dtype=numpy.int8))
+    del turn
+    numpy.save('y.npy', numpy.array(next_move, dtype=numpy.int64))
+    del next_move
+
     logger.info(f'Finished data transformation. Saved {game_count} games with {data_entries} data points.')

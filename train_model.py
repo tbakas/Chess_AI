@@ -3,14 +3,14 @@ import torch
 import lightning
 import numpy
 import logging
-import os
 
 
 logger = logging.getLogger(__name__)
-max_epochs = 10
-max_rows = 5000
-batch_size = 512
+max_epochs = 1
+batch_size = 128
 base_path = ''
+train_perc = 0.8
+val_perc = 0.1
 
 
 class ChessLightning(lightning.LightningModule):
@@ -53,12 +53,22 @@ class ChessLightning(lightning.LightningModule):
         self.log('test_acc', acc)
 
 
-def train_val_test_split(size: int, train_perc: float, val_perc: float) -> tuple[int, int]:
-    # assumes data is already shuffled
-    assert 0 < train_perc < 1 and 0 < val_perc <= 1 - train_perc, 'Invalid percentages'
-    n_ = round(train_perc * size)
-    m_ = n_ + round(val_perc * size)
-    return n_, m_
+class ChessDataset(torch.utils.data.Dataset):
+    def __init__(self, x_path, t_path, y_path, mask_path):
+        self.x = numpy.load(x_path, mmap_mode='r')
+        self.t = numpy.load(t_path, mmap_mode='r')
+        self.y = numpy.load(y_path, mmap_mode='r')
+        self.packed_mask = numpy.load(mask_path, mmap_mode='r')
+
+    def __len__(self):
+        return len(self.t)
+
+    def __getitem__(self, item):
+        x_tensor = torch.tensor(self.x[item], dtype=torch.long)
+        t_tensor = torch.tensor(self.t[item], dtype=torch.float32)
+        y_tensor = torch.tensor(self.y[item], dtype=torch.long)
+        mask_tensor = torch.tensor(numpy.unpackbits(self.packed_mask[item], axis=0), dtype=torch.bool)
+        return x_tensor, t_tensor, y_tensor, mask_tensor
 
 
 if __name__ == '__main__':
@@ -73,41 +83,25 @@ if __name__ == '__main__':
     chess_model = ChessModel().to(device)
 
     logger.info('Opening transformed_data.csv')
-    data = numpy.load(base_path + "transformed_data.npz")
-    x = torch.tensor(data['position'][:max_rows])
-    t = torch.tensor(data['turn'][:max_rows])
-    y = torch.tensor(data['next_move'][:max_rows])
-    mask = torch.tensor(data['mask'][:max_rows])
+    dataset = ChessDataset(base_path + 'x.npy', base_path + 't.npy', base_path + 'y.npy', base_path + 'mask.npy')
 
-    del data
+    indices = numpy.arange(len(dataset))
+    n = round(train_perc * indices.shape[0])
+    m = n + round(val_perc * indices.shape[0])
+    rng = numpy.random.default_rng()
+    rng.shuffle(indices)
 
-    # shuffle data
-    idx = numpy.arange(x.shape[0])
-    rng = numpy.random.default_rng(seed=24)
-    rng.shuffle(idx)
-    x, t, y, mask = x[idx], t[idx], y[idx], mask[idx]
+    train_dataset = torch.utils.data.Subset(dataset, indices[:n])
+    val_dataset = torch.utils.data.Subset(dataset, indices[n:m])
+    test_dataset = torch.utils.data.Subset(dataset, indices[m:])
 
-    del rng, idx
-
-    n, m = train_val_test_split(x.shape[0], 0.8, 0.1)
-    x_train, x_val, x_test = x[:n], x[n:m], x[m:]
-    t_train, t_val, t_test = t[:n], t[n:m], t[m:]
-    y_train, y_val, y_test = y[:n], y[n:m], y[m:]
-    mask_train, mask_val, mask_test = mask[:n], mask[n:m], mask[m:]
-
-    logger.info(f'x.shape is {x.shape}, t.shape is {t.shape}, y.shape is {y.shape} and mask.shape is {mask.shape}')
-
-    del x, y, t, mask
-
-    train_dataset = torch.utils.data.TensorDataset(x_train, t_train, y_train, mask_train)
-    train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size, shuffle=False)
-
-    val_dataset = torch.utils.data.TensorDataset(x_val, t_val, y_val, mask_val)
+    train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
 
     chess_lightning = ChessLightning(chess_model)
     checkpoint_callback = lightning.pytorch.callbacks.ModelCheckpoint(monitor="val_loss", mode="min", save_top_k=1,
-                                                                      filename="{epoch}-{val_loss:.3f}")
+                                                                      filename="{epoch}-{val_loss:.3f}",
+                                                                      dirpath=base_path)
 
     trainer = lightning.Trainer(max_epochs=max_epochs, callbacks=[checkpoint_callback])
 
@@ -115,19 +109,8 @@ if __name__ == '__main__':
     trainer.fit(chess_lightning, train_loader, val_loader)
     logger.info('Training completed.')
 
-    del train_loader, train_dataset, val_dataset, val_loader, x_train, x_val, t_train, t_val, y_train, y_val
-    del mask_train, mask_val
+    del train_loader, train_dataset, val_dataset, val_loader
 
-    # test with the best model version
-    lightning_logs = os.listdir('lightning_logs')
-    version = lightning_logs[-1]
-    checkpoint = os.listdir('lightning_logs/' + version + '/checkpoints')[0]
-    checkpoint_path = 'lightning_logs/' + version + '/checkpoints/' + checkpoint
-    logger.info('Loading checkpoint titled ' + checkpoint + ' in ' + version)
-    chess_lightning = ChessLightning.load_from_checkpoint(checkpoint_path, model=ChessModel())
-
-    test_dataset = torch.utils.data.TensorDataset(x_test, t_test, y_test, mask_test)
     test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
-
     logger.info('Beginning testing.')
-    trainer.test(chess_lightning, test_loader)
+    trainer.test(chess_lightning, test_loader, ckpt_path='best')

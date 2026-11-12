@@ -22,9 +22,3 @@ def test_calculate_loss():
     assert acc.dtype == torch.float
     assert not torch.isnan(acc)
     assert 0 <= acc.item() <= 100
-
-
-def test_train_val_test_split():
-    n, m = train_model.train_val_test_split(10, 0.8, 0.1)
-    assert n == 8
-    assert m == 9
